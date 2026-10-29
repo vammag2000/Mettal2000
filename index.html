@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#111111">
+    <title>Детектор металла — WP30 Pro</title>
+    <style>
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0d0d0d;
+            color: #eaeaea;
+            text-align: center;
+            padding: 18px;
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            touch-action: manipulation;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        h1 {
+            font-size: 1.4em;
+            color: #ffffff;
+            margin: 8px 0 4px;
+            font-weight: 600;
+        }
+
+        .hint {
+            font-size: 0.85em;
+            color: #888;
+            margin-bottom: 18px;
+        }
+
+        #status {
+            font-size: 1.5em;
+            font-weight: bold;
+            margin: 10px 0 20px;
+            padding: 18px 22px;
+            border-radius: 14px;
+            background: #1c1c1c;
+            width: 100%;
+            max-width: 420px;
+            transition: background 0.15s ease, color 0.15s ease;
+            box-shadow: 0 0 0 1px #2a2a2a inset;
+        }
+
+        #status.detected {
+            background: #d81b1b;
+            color: #fff;
+            box-shadow: 0 0 25px #d81b1b99;
+            animation: pulse 0.6s infinite alternate;
+        }
+
+        @keyframes pulse {
+            from { box-shadow: 0 0 15px #d81b1b66; }
+            to   { box-shadow: 0 0 35px #d81b1bcc; }
+        }
+
+        .readout {
+            font-size: 2.6em;
+            font-weight: 700;
+            color: #4ade80;
+            margin: 4px 0;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .unit {
+            font-size: 0.4em;
+            color: #888;
+            font-weight: normal;
+        }
+
+        .sub {
+            font-size: 0.95em;
+            color: #9a9a9a;
+            margin-bottom: 6px;
+        }
+
+        .bar-wrap {
+            width: 100%;
+            max-width: 420px;
+            height: 14px;
+            background: #1c1c1c;
+            border-radius: 8px;
+            overflow: hidden;
+            margin: 12px 0 22px;
+            box-shadow: 0 0 0 1px #2a2a2a inset;
+        }
+
+        .bar-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #22c55e, #eab308, #ef4444);
+            transition: width 0.1s linear;
+        }
+
+        .controls {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            justify-content: center;
+            width: 100%;
+            max-width: 420px;
+        }
+
+        button {
+            flex: 1 1 45%;
+            padding: 16px 14px;
+            font-size: 1.05em;
+            font-weight: 600;
+            border: none;
+            border-radius: 12px;
+            background: #2563eb;
+            color: #fff;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: transform 0.05s, background 0.15s;
+        }
+
+        button:active { transform: scale(0.97); background: #1d4ed8; }
+
+        button.secondary { background: #333; }
+        button.secondary:active { background: #444; }
+
+        #log {
+            margin-top: 20px;
+            font-size: 0.78em;
+            color: #9a9a9a;
+            width: 100%;
+            max-width: 420px;
+            height: 90px;
+            overflow-y: auto;
+            border-top: 1px solid #2a2a2a;
+            padding-top: 10px;
+            font-family: ui-monospace, "Courier New", monospace;
+            text-align: left;
+        }
+
+        #log div { padding: 2px 0; line-height: 1.35; }
+        #log::-webkit-scrollbar { width: 4px; }
+        #log::-webkit-scrollbar-thumb { background: #444; border-radius: 2px; }
+    </style>
+</head>
+<body>
+    <h1>🧲 Детектор металла</h1>
+    <div class="hint">WP30 Pro · магнитометр · Generic Sensor API</div>
+
+    <div id="status">Запуск датчика…</div>
+
+    <div class="readout">
+        <span id="magnitude">0.0</span><span class="unit"> µT</span>
+    </div>
+    <div class="sub">Базовая линия: <span id="baseline">—</span> µT</div>
+
+    <div class="bar-wrap">
+        <div class="bar-fill" id="bar"></div>
+    </div>
+
+    <div class="controls">
+        <button id="calibrateBtn">📏 Калибровать</button>
+        <button id="resetBtn" class="secondary">🔄 Сброс</button>
+    </div>
+
+    <div id="log"></div>
+
+<script>
+(function () {
+    'use strict';
+
+    // === НАСТРОЙКИ ===
+    const THRESHOLD = 30;      // порог срабатывания в µT (увеличьте при ложных срабатываниях)
+    const MAX_DELTA = 150;     // для шкалы прогресс-бара
+    const FREQ = 10;           // частота опроса датчика, Гц
+
+    // === ЭЛЕМЕНТЫ ===
+    const $status   = document.getElementById('status');
+    const $mag      = document.getElementById('magnitude');
+    const $baseline = document.getElementById('baseline');
+    const $bar      = document.getElementById('bar');
+    const $log      = document.getElementById('log');
+
+    // === СОСТОЯНИЕ ===
+    let sensor = null;
+    let baseline = null;
+    let isDetected = false;
+    let audioCtx = null;
+    let started = false;
+
+    // === ЛОГ ===
+    function log(msg) {
+        const el = document.createElement('div');
+        const t = new Date().toLocaleTimeString();
+        el.textContent = '[' + t + '] ' + msg;
+        $log.prepend(el);
+        while ($log.children.length > 20) $log.lastChild.remove();
+    }
+
+    // === ЗВУК ===
+    function initAudio() {
+        if (audioCtx) return;
+        try {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        } catch (e) {
+            log('Аудио недоступно');
+        }
+    }
+
+    function beep(freq, duration, volume) {
+        if (!audioCtx) return;
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.value = volume || 0.25;
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+        osc.stop(audioCtx.currentTime + duration);
+    }
+
+    // === ВИБРАЦИЯ ===
+    function vibrate(pattern) {
+        if (navigator.vibrate) navigator.vibrate(pattern);
+    }
+
+    // === КАЛИБРОВКА ===
+    function calibrate() {
+        if (sensor && typeof sensor.x === 'number') {
+            baseline = Math.sqrt(sensor.x ** 2 + sensor.y ** 2 + sensor.z ** 2);
+            $baseline.textContent = baseline.toFixed(1);
+            isDetected = false;
+            $status.textContent = '🟢 Готов';
+            $status.classList.remove('detected');
+            beep(660, 0.1, 0.2);
+            vibrate(40);
+            log('Калибровка: ' + baseline.toFixed(1) + ' µT');
+        } else {
+            log('Нет данных датчика для калибровки');
+        }
+    }
+
+    function resetAll() {
+        baseline = null;
+        isDetected = false;
+        $baseline.textContent = '—';
+        $status.textContent = sensor ? '🟢 Готов' : 'Ожидание датчика…';
+        $status.classList.remove('detected');
+        $bar.style.width = '0%';
+        beep(440, 0.1, 0.2);
+        vibrate(30);
+        log('Сброс выполнен');
+    }
+
+    // === ОБРАБОТКА ЧТЕНИЯ ===
+    function onReading() {
+        const x = sensor.x || 0;
+        const y = sensor.y || 0;
+        const z = sensor.z || 0;
+        const mag = Math.sqrt(x * x + y * y + z * z);
+
+        $mag.textContent = mag.toFixed(1);
+
+        if (baseline === null) {
+            baseline = mag;
+            $baseline.textContent = baseline.toFixed(1);
+            log('Автокалибровка: ' + baseline.toFixed(1) + ' µT');
+        }
+
+        const delta = Math.abs(mag - baseline);
+
+        // Шкала (для визуала)
+        let pct = Math.min(100, (delta / MAX_DELTA) * 100);
+        $bar.style.width = pct.toFixed(1) + '%';
+
+        // Срабатывание
+        if (delta > THRESHOLD) {
+            if (!isDetected) {
+                isDetected = true;
+                $status.textContent = '🔴 ОБНАРУЖЕН МЕТАЛЛ';
+                $status.classList.add('detected');
+                beep(1200, 0.25, 0.35);
+                vibrate([100, 50, 100]);
+                log('Скачок поля: +' + delta.toFixed(1) + ' µT');
+            }
+        } else if (isDetected) {
+            isDetected = false;
+            $status.textContent = '🟢 Чисто';
+            $status.classList.remove('detected');
+            beep(440, 0.1, 0.2);
+            vibrate(40);
+            log('Сигнал в норме (Δ ' + delta.toFixed(1) + ' µT)');
+        }
+    }
+
+    // === ЗАПУСК ДАТЧИКА ===
+    async function startSensor() {
+        if (started) return;
+        started = true;
+
+        if (!('Magnetometer' in window)) {
+            $status.textContent = '❌ Магнитометр не поддерживается';
+            log('Браузер не поддерживает Magnetometer API');
+            log('Попробуйте Chrome ≥ 90 на Android через HTTPS');
+            return;
+        }
+
+        try {
+            sensor = new Magnetometer({ frequency: FREQ });
+            sensor.addEventListener('reading', onReading);
+            sensor.addEventListener('error', (e) => {
+                const name = (e.error && e.error.name) || 'Unknown';
+                $status.textContent = '⚠️ Ошибка: ' + name;
+                log('Ошибка датчика: ' + name);
+                if (name === 'NotAllowedError') {
+                    log('Разрешите доступ к датчикам в настройках браузера');
+                }
+            });
+            sensor.start();
+            log('Датчик запущен (' + FREQ + ' Гц)');
+            if (baseline === null) $status.textContent = '🟢 Готов (калибровка…)';
+        } catch (err) {
+            $status.textContent = '⚠️ Не удалось запустить';
+            log('Исключение: ' + err.message);
+        }
+    }
+
+    // === ЖЕСТ ПОЛЬЗОВАТЕЛЯ ===
+    // Браузеры требуют пользовательский жест для AudioContext
+    function firstInteraction() {
+        initAudio();
+        beep(600, 0.05, 0.1); // «разогрев» звука
+        startSensor();
+    }
+
+    // Кнопки
+    document.getElementById('calibrateBtn').addEventListener('click', () => {
+        initAudio();
+        startSensor();
+        calibrate();
+    });
+
+    document.getElementById('resetBtn').addEventListener('click', () => {
+        initAudio();
+        startSensor();
+        resetAll();
+    });
+
+    // Попытка запуска сразу (сработает, если браузер разрешил)
+    if ('Magnetometer' in window) {
+        startSensor();
+        log('Попытка автозапуска…');
+    } else {
+        $status.textContent = '❌ Магнитометр не поддерживается';
+    }
+
+    // Первый тап по экрану — активация звука и гарантированный запуск
+    document.body.addEventListener('touchstart', firstInteraction, { once: true, passive: true });
+    document.body.addEventListener('click', firstInteraction, { once: true });
+
+    // Не давать экрану гаснуть во время работы (если поддерживается)
+    if ('wakeLock' in navigator) {
+        navigator.wakeLock.request('screen').catch(() => {});
+    }
+})();
+</script>
+</body>
+</html>
