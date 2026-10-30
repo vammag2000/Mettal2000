@@ -4,16 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#05080c">
-<title>Реальный металлоискатель</title>
+<title>Металлоискатель</title>
 <style>
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#05080c;color:#e6f1ff;
+  html,body{margin:0;height:100%;overflow:hidden;background:#05080c;color:#e6f1ff;
     font-family:system-ui,-apple-system,Roboto,sans-serif;user-select:none;overscroll-behavior:none;}
   .app{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:space-between;
-    padding:calc(env(safe-area-inset-top) + 10px) 16px calc(env(safe-area-inset-bottom) + 12px);}
-  header{font-size:13px;letter-spacing:.3em;text-transform:uppercase;color:#5c7488;font-weight:600;}
-  .gauge-wrap{position:relative;width:min(78vw,300px,44vh);aspect-ratio:1;display:grid;place-items:center;
-    transition:transform .1s ease-out;}
+    padding:calc(env(safe-area-inset-top) + 8px) 16px calc(env(safe-area-inset-bottom) + 10px);}
+  header{font-size:12px;letter-spacing:.3em;text-transform:uppercase;color:#5c7488;font-weight:600;}
+  .gauge-wrap{position:relative;width:min(78vw,300px,44vh);aspect-ratio:1;display:grid;place-items:center;transition:transform .1s;}
   .gauge{width:100%;height:100%;}
   .track{fill:none;stroke:#131c26;stroke-width:13;}
   .progress{fill:none;stroke:#22ff88;stroke-width:13;stroke-linecap:round;
@@ -23,16 +22,16 @@
   .value{font-size:clamp(36px,14vw,64px);font-weight:700;line-height:1;font-variant-numeric:tabular-nums;}
   .unit{font-size:13px;color:#6d8598;letter-spacing:.12em;text-transform:uppercase;}
   .delta{margin-top:6px;font-size:14px;font-variant-numeric:tabular-nums;color:#4f6a80;}
-  .panel{width:100%;max-width:420px;display:flex;flex-direction:column;gap:12px;}
-  .status{text-align:center;font-size:11.5px;color:#4a6076;min-height:16px;}
-  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:34px;background:transparent;}
+  .panel{width:100%;max-width:420px;display:flex;flex-direction:column;gap:10px;}
+  .status{text-align:center;font-size:11px;color:#4a6076;min-height:32px;line-height:1.4;padding:0 4px;}
+  input[type=range]{-webkit-appearance:none;width:100%;height:34px;background:transparent;}
   input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px;background:#16202c;}
   input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:26px;height:26px;border-radius:50%;
     background:#22ff88;margin-top:-10px;box-shadow:0 0 12px rgba(34,255,136,.5);}
   .buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
-  button{font-family:inherit;font-size:14px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
-    color:#a9c4d8;background:#0e1620;border:1px solid #1b2836;border-radius:14px;padding:16px 8px;
-    min-height:56px;cursor:pointer;transition:background .15s,color .15s,transform .08s;}
+  button{font-family:inherit;font-size:13px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+    color:#a9c4d8;background:#0e1620;border:1px solid #1b2836;border-radius:14px;padding:16px 6px;
+    min-height:54px;cursor:pointer;transition:background .15s,color .15s,transform .08s;}
   button:active{transform:scale(.97);background:#16222f;}
   button.on{color:#22ff88;border-color:#1f5c40;background:#0b1a13;}
   button.calib{color:#ffcc44;border-color:#4a3a12;background:#171205;}
@@ -42,7 +41,6 @@
 <body>
 <div class="app">
   <header>Магнитометр</header>
-
   <div class="gauge-wrap" id="gaugeWrap">
     <svg class="gauge" viewBox="0 0 240 240">
       <circle class="track" cx="120" cy="120" r="100"/>
@@ -50,13 +48,12 @@
     </svg>
     <div class="readout">
       <div class="value" id="value">--</div>
-      <div class="unit">мкТл (µT)</div>
+      <div class="unit" id="unit">µT</div>
       <div class="delta" id="delta">Δ --</div>
     </div>
   </div>
-
   <div class="panel">
-    <div class="status" id="status">Инициализация датчика…</div>
+    <div class="status" id="status">Проверка поддержки датчиков…</div>
     <input type="range" id="sens" min="0" max="100" value="75">
     <div class="buttons">
       <button id="calib" class="calib">Калибровка</button>
@@ -69,63 +66,87 @@
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
-  const ring = $('ring'), valueEl = $('value'), deltaEl = $('delta'), statusEl = $('status');
-  const sensEl = $('sens'), wrap = $('gaugeWrap'), calibBtn = $('calib'), soundBtn = $('sound');
+  const ring = $('ring'), valueEl = $('value'), unitEl = $('unit'), deltaEl = $('delta');
+  const statusEl = $('status'), sensEl = $('sens'), wrap = $('gaugeWrap');
+  const calibBtn = $('calib'), soundBtn = $('sound');
   const CIRC = 2 * Math.PI * 100;
   ring.style.strokeDasharray = CIRC;
   ring.style.strokeDashoffset = CIRC;
 
-  let baseline = null, smooth = 0, raw = 0, ready = false, calibrating = false, calSamples = [];
+  let mode = null;         // 'mag' | 'orient'
+  let baseline = null, smooth = 0, ready = false;
+  let calibrating = false, calSamples = [];
   let sens = 75, soundOn = false, level = 0;
   let audioCtx, osc, gainNode;
+  let lastAlpha = null, orientBuf = [];
 
   function ensureAudio() {
     if (audioCtx) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     audioCtx = new AC();
-    osc = audioCtx.createOscillator();
-    gainNode = audioCtx.createGain();
+    osc = audioCtx.createOscillator(); gainNode = audioCtx.createGain();
     osc.type = 'sine'; osc.frequency.value = 440; gainNode.gain.value = 0;
     osc.connect(gainNode); gainNode.connect(audioCtx.destination); osc.start();
   }
 
   function feed(v) {
     if (!isFinite(v)) return;
-    raw = v;
     if (!ready) { smooth = v; ready = true; }
-    else smooth += (v - smooth) * 0.25;
+    else smooth += (v - smooth) * 0.22;
     if (baseline === null) baseline = smooth;
     if (calibrating) calSamples.push(smooth);
   }
 
-  function startSensor() {
-    if (!('Magnetometer' in window)) {
-      statusEl.textContent = 'ОШИБКА: Magnetometer API не поддерживается этим браузером.';
-      return;
-    }
+  // --- основной путь: Magnetometer ---
+  function startMag() {
+    if (!('Magnetometer' in window)) return false;
     try {
       const mag = new Magnetometer({ frequency: 60 });
       mag.addEventListener('reading', () => {
+        if (mode === 'orient') return;
+        mode = 'mag'; unitEl.textContent = 'µT';
         feed(Math.hypot(mag.x, mag.y, mag.z));
       });
-      mag.addEventListener('error', (e) => {
-        statusEl.textContent = 'Ошибка датчика: ' + (e.error?.name || 'unknown');
+      mag.addEventListener('error', e => {
+        statusEl.textContent = 'Магнитометр: ' + (e.error?.name || 'ошибка') + '. Пробую компас…';
+        startOrient();
       });
       mag.start();
-      statusEl.textContent = 'Магнитометр активен (сырые данные)';
-    } catch (e) {
-      statusEl.textContent = 'Не удалось запустить: ' + e.message;
-    }
+      return true;
+    } catch (err) { return false; }
   }
 
-  function threshold() { return 40 - 38 * (sens / 100); }
+  // --- резервный путь: искажение компаса ---
+  function startOrient() {
+    if (mode === 'orient') return;
+    let started = false;
+    const handler = e => {
+      if (mode === 'mag') return;
+      const a = e.webkitCompassHeading != null ? e.webkitCompassHeading : e.alpha;
+      if (a == null || isNaN(a)) return;
+      mode = 'orient'; unitEl.textContent = '°';
+      if (!started) { started = true; statusEl.textContent = 'Режим компаса: реагирует на искажение поля'; }
+      if (lastAlpha === null) { lastAlpha = a; return; }
+      let d = a - lastAlpha;
+      while (d > 180) d -= 360; while (d < -180) d += 360;
+      lastAlpha = a;
+      orientBuf.push(d * d); if (orientBuf.length > 30) orientBuf.shift();
+      const rms = Math.sqrt(orientBuf.reduce((s, x) => s + x, 0) / orientBuf.length);
+      feed(rms);
+    };
+    window.addEventListener('deviceorientationabsolute', handler, true);
+    window.addEventListener('deviceorientation', handler, true);
+  }
+
+  function threshold() {
+    return mode === 'orient' ? (16 - 15.2 * sens / 100) : (40 - 38 * sens / 100);
+  }
 
   let lastVib = 0;
   function loop() {
     requestAnimationFrame(loop);
     if (!ready) return;
-
     const thr = threshold();
     const delta = smooth - baseline;
     const target = Math.min(1, Math.abs(delta) / Math.max(thr, 0.05));
@@ -137,11 +158,9 @@
     ring.style.strokeDashoffset = CIRC * (1 - level);
     ring.style.stroke = col;
     ring.style.filter = `drop-shadow(0 0 ${(4 + 18 * level).toFixed(0)}px ${col})`;
-
     valueEl.textContent = smooth.toFixed(1);
     valueEl.style.color = level > 0.6 ? col : '#e6f1ff';
     deltaEl.textContent = `Δ ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}`;
-
     wrap.style.transform = `scale(${(1 + 0.03 * level).toFixed(3)})`;
 
     if (soundOn && audioCtx) {
@@ -149,34 +168,31 @@
       osc.frequency.setTargetAtTime(320 + level * 900, audioCtx.currentTime, 0.03);
       gainNode.gain.setTargetAtTime(level > 0.05 ? Math.min(0.15, level * 0.17) : 0, audioCtx.currentTime, 0.05);
     }
-
     if (navigator.vibrate && level > 0.45) {
       const now = performance.now();
       if (now - lastVib > 420 - 340 * level) {
-        navigator.vibrate(Math.round(12 + 40 * level));
-        lastVib = now;
+        navigator.vibrate(Math.round(12 + 40 * level)); lastVib = now;
       }
     }
   }
   requestAnimationFrame(loop);
 
   calibBtn.addEventListener('click', () => {
-    if (!ready) { statusEl.textContent = 'Нет данных с датчика'; return; }
+    if (!ready) { statusEl.textContent = 'Датчик ещё не прислал данные'; return; }
     calibrating = true; calSamples = [];
-    calibBtn.classList.add('active'); calibBtn.textContent = 'Калибровка…';
+    calibBtn.classList.add('active'); calibBtn.textContent = 'Идёт…';
     setTimeout(() => {
       calibrating = false;
       calibBtn.classList.remove('active'); calibBtn.textContent = 'Калибровка';
       if (calSamples.length) {
         baseline = calSamples.reduce((a, b) => a + b, 0) / calSamples.length;
-        statusEl.textContent = `Фон зафиксирован: ${baseline.toFixed(1)} µT`;
+        statusEl.textContent = `Фон: ${baseline.toFixed(1)} ${mode === 'orient' ? '°' : 'µT'}`;
       }
     }, 1500);
   });
 
   soundBtn.addEventListener('click', () => {
-    ensureAudio();
-    soundOn = !soundOn;
+    ensureAudio(); soundOn = !soundOn;
     if (!soundOn && gainNode) gainNode.gain.setTargetAtTime(0, audioCtx.currentTime, 0.05);
     soundBtn.textContent = 'Звук: ' + (soundOn ? 'вкл' : 'выкл');
     soundBtn.classList.toggle('on', soundOn);
@@ -184,13 +200,25 @@
   });
 
   sensEl.addEventListener('input', () => { sens = +sensEl.value; });
-
   document.addEventListener('pointerdown', () => {
-    ensureAudio();
-    if (audioCtx?.state === 'suspended') audioCtx.resume();
+    ensureAudio(); if (audioCtx?.state === 'suspended') audioCtx.resume();
   }, { once: true });
 
-  startSensor();
+  // --- диагностика ---
+  const hasMag = 'Magnetometer' in window;
+  const hasOrient = 'DeviceOrientationEvent' in window;
+  statusEl.textContent = `Magnetometer: ${hasMag ? 'есть' : 'нет'} · Orientation: ${hasOrient ? 'есть' : 'нет'}`;
+
+  if (!hasMag && !hasOrient) {
+    statusEl.textContent = 'Датчики не найдены. Включите Generic Sensor в chrome://flags и перезапустите Chrome.';
+  } else {
+    if (!startMag()) startOrient();
+    setTimeout(() => {
+      if (!ready && hasOrient) startOrient();
+      if (!ready) statusEl.textContent += ' · нет данных';
+    }, 2000);
+  }
+
   if ('wakeLock' in navigator) navigator.wakeLock.request('screen').catch(() => {});
 })();
 </script>
